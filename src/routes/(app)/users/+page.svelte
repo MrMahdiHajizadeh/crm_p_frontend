@@ -1,0 +1,538 @@
+﻿<script>
+  import { invalidateAll } from '$app/navigation';
+  import { toast } from '$lib/components/ui/toast/index.js';
+  import {
+    Users,
+    UsersRound,
+    User,
+    Shield,
+    Edit,
+    Plus,
+    Check,
+    X,
+    Trash2,
+    AlertCircle,
+    UserCheck
+  } from '@lucide/svelte';
+  import { PageHeader, ViewTabs } from '$lib/components/layout';
+  import { Button } from '$lib/components/ui/button/index.js';
+  import { Input } from '$lib/components/ui/input/index.js';
+  import { Label } from '$lib/components/ui/label/index.js';
+  import { Badge } from '$lib/components/ui/badge/index.js';
+  import { SectionCard } from '$lib/components/ui/section-card/index.js';
+  import * as Table from '$lib/components/ui/table/index.js';
+  import * as Avatar from '$lib/components/ui/avatar/index.js';
+  import * as AlertDialog from '$lib/components/ui/alert-dialog/index.js';
+  import * as Tabs from '$lib/components/ui/tabs/index.js';
+  import { getInitials, formatDate } from '$lib/utils/formatting.js';
+  import { TeamCard, TeamFormDialog } from '$lib/components/users/index.js';
+  import { _ } from '$lib/i18n';
+
+  /** @type {{ data: import('./$types').PageData, form: any }} */
+  let { data, form } = $props();
+
+  // Get logged-in user id from data
+  let loggedInUserId = $derived(data.user?.id);
+
+  // Transform users data for table display
+  let users = $derived(
+    Array.isArray(data.users)
+      ? data.users.map((u) => ({
+          id: u.user.id,
+          odId: u.profile?.id || u.odId,
+          name: u.user.name || u.user.phone,
+          email: u.user.email,
+          phone: u.user.phone,
+          role: u.role,
+          joined: u.profile?.created_at
+            ? typeof u.profile.created_at === 'string'
+              ? u.profile.created_at.slice(0, 10)
+              : new Date(u.profile.created_at).toISOString().slice(0, 10)
+            : '',
+          avatar: u.profile?.profile_photo || '',
+          isSelf: loggedInUserId === u.user.id,
+          isActive: u.isActive
+        }))
+      : []
+  );
+
+  // Teams data
+  let teams = $derived(data.teams || []);
+
+  // Users list for team assignment (active users only, transformed for multi-select)
+  let availableUsers = $derived(
+    users
+      .filter((u) => u.isActive)
+      .map((u) => ({
+        id: u.odId,
+        name: u.name,
+        email: u.email
+      }))
+  );
+
+  // State for editing roles
+  /** @type {string | null} */
+  let editingRoleId = $state(null);
+
+  // State for team dialog
+  let teamDialogOpen = $state(false);
+  /** @type {any} */
+  let editingTeam = $state(null);
+
+  // Handle form results
+  $effect(() => {
+    if (form?.success) {
+      if (form.action === 'add_user') {
+        toast.success($_('users.member_added'));
+      } else if (form.action === 'create_team' || form.action === 'update_team') {
+        const msgKey = form.action === 'create_team' ? 'users.team_created' : 'users.team_updated';
+        toast.success($_(msgKey));
+      } else if (form.action === 'delete_team') {
+        toast.success($_('users.team_deleted'));
+      } else if (form.action === 'remove_user') {
+        toast.success($_('users.user_deactivated'));
+      } else if (form.action === 'activate_user') {
+        toast.success($_('users.user_activated'));
+      }
+      invalidateAll();
+    } else if (form?.error) {
+      toast.error(form.error);
+    }
+  });
+
+  /**
+   * Open dialog to create a new team
+   */
+  function openCreateTeamDialog() {
+    editingTeam = null;
+    teamDialogOpen = true;
+  }
+
+  /**
+   * Open dialog to edit a team
+   * @param {any} team
+   */
+  function openEditTeamDialog(team) {
+    editingTeam = team;
+    teamDialogOpen = true;
+  }
+
+
+
+  /**
+   * Handle team deletion
+   * @param {string} teamId
+   */
+  function handleTeamDelete(teamId) {
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = '?/delete_team';
+    form.style.display = 'none';
+
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = 'team_id';
+    input.value = teamId;
+    form.appendChild(input);
+
+    document.body.appendChild(form);
+    form.submit();
+  }
+
+  /**
+   * Handle user removal from organization
+   * @param {string} userId
+   */
+  function handleRemoveUser(userId) {
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = '?/remove_user';
+    form.style.display = 'none';
+
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = 'user_id';
+    input.value = userId;
+    form.appendChild(input);
+
+    document.body.appendChild(form);
+    form.submit();
+  }
+
+  /**
+   * Handle user activation (restore inactive user)
+   * @param {string} userId
+   */
+  function handleActivateUser(userId) {
+    const form = document.createElement('form');
+    form.method = 'POST';
+    form.action = '?/activate_user';
+    form.style.display = 'none';
+
+    const input = document.createElement('input');
+    input.type = 'hidden';
+    input.name = 'user_id';
+    input.value = userId;
+    form.appendChild(input);
+
+    document.body.appendChild(form);
+    form.submit();
+  }
+</script>
+
+<svelte:head>
+  <title>{$_('users.title')} - {$_('app.name')}</title>
+</svelte:head>
+
+<PageHeader title={$_('users.title')} subtitle={$_('users.subtitle')}>
+  {#snippet tabs()}
+    <ViewTabs views={[{ id: 'all', label: $_('common.all'), count: users.length }]} active="all" />
+  {/snippet}
+</PageHeader>
+
+<div class="flex-1 space-y-6 p-4 md:p-6">
+  <!-- Error Message -->
+  {#if data.error}
+    <SectionCard
+      padded={false}
+      class="border-red-200 bg-red-50 p-4 dark:border-red-800 dark:bg-red-900/20"
+    >
+      <div class="flex items-center gap-3">
+        <div
+          class="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-red-100 dark:bg-red-800"
+        >
+          <AlertCircle class="h-4 w-4 text-red-600 dark:text-red-300" />
+        </div>
+        <p class="text-sm font-medium text-red-800 dark:text-red-200">
+          {data.error.name}
+        </p>
+      </div>
+    </SectionCard>
+  {:else}
+    <div class="mx-auto max-w-5xl">
+      <Tabs.Root value="users" class="w-full">
+        <Tabs.List class="mb-6 grid w-full grid-cols-2 lg:w-[400px]">
+          <Tabs.Trigger value="users" class="gap-2">
+            <Users class="h-4 w-4" />
+            {$_('users.tab_users')}
+          </Tabs.Trigger>
+          <Tabs.Trigger value="teams" class="gap-2">
+            <UsersRound class="h-4 w-4" />
+            {$_('users.tab_teams')}
+          </Tabs.Trigger>
+        </Tabs.List>
+
+        <!-- Users Tab -->
+        <Tabs.Content value="users" class="space-y-6">
+          <!-- Add User Form -->
+          <SectionCard>
+            {#snippet title()}
+              <div class="flex items-center gap-3">
+                <div
+                  class="flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--color-success-light)] dark:bg-[var(--color-success-default)]/15"
+                >
+                  <Plus class="h-5 w-5 text-[var(--color-success-default)]" />
+                </div>
+                <div>
+                  <h3 class="text-[16px] font-medium leading-[1.3] text-[color:var(--text-primary)]">
+                    {$_('users.add_new_member')}
+                  </h3>
+                  <p class="text-[12px] text-[color:var(--text-muted)]">
+                    {$_('users.invite_subtitle')}
+                  </p>
+                </div>
+              </div>
+            {/snippet}
+              <form
+                method="POST"
+                action="?/add_user"
+                class="flex flex-col gap-4 sm:flex-row sm:items-end"
+              >
+                <div class="flex-1">
+                  <Label class="" for="add-user-name">{$_('users.name_label')} *</Label>
+                  <Input
+                    id="add-user-name"
+                    name="name"
+                    type="text"
+                    required
+                    placeholder={$_('users.name_placeholder')}
+                    class="mt-1.5"
+                  />
+                </div>
+                <div class="flex-1">
+                  <Label class="" for="add-user-phone">{$_('users.phone_label')} *</Label>
+                  <Input
+                    id="add-user-phone"
+                    name="phone"
+                    type="tel"
+                    required
+                    placeholder={$_('users.phone_placeholder')}
+                    class="mt-1.5"
+                  />
+                </div>
+                <div class="flex-1">
+                  <Label class="" for="add-user-password">{$_('users.password_label')} *</Label>
+                  <Input
+                    id="add-user-password"
+                    name="password"
+                    type="password"
+                    required
+                    placeholder={$_('users.password_placeholder')}
+                    class="mt-1.5"
+                  />
+                </div>
+                <div class="sm:w-40">
+                  <Label class="" for="add-user-role">{$_('users.role_label')}</Label>
+                  <select
+                    id="add-user-role"
+                    name="role"
+                    class="border-input bg-background ring-offset-background focus-visible:ring-ring mt-1.5 flex h-10 w-full rounded-md border px-3 py-2 text-sm focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:outline-none"
+                  >
+                    <option value="USER">{$_('users.role_user')}</option>
+                    <option value="ADMIN">{$_('users.role_admin')}</option>
+                  </select>
+                </div>
+                <Button type="submit">
+                  <Plus class="me-2 h-4 w-4" />
+                  {$_('users.add_member')}
+                </Button>
+              </form>
+          </SectionCard>
+
+          <!-- Users Table -->
+          <SectionCard>
+            {#snippet title()}
+              <div class="flex items-center gap-3">
+                <div
+                  class="flex h-10 w-10 items-center justify-center rounded-lg bg-[var(--color-primary-light)] dark:bg-[var(--color-primary-default)]/15"
+                >
+                  <Users class="h-5 w-5 text-[var(--color-primary-default)]" />
+                </div>
+                <div>
+                  <h3 class="text-[16px] font-medium leading-[1.3] text-[color:var(--text-primary)]">
+                    {$_('users.team_members')}
+                  </h3>
+                  <p class="text-[12px] text-[color:var(--text-muted)]">
+                    {users.length} {$_('users.member')}{users.length !== 1 ? 's' : ''} {$_('users.in_your_organization')}
+                  </p>
+                </div>
+              </div>
+            {/snippet}
+              <div class="rounded-lg border">
+                <Table.Root>
+                  <Table.Header>
+                    <Table.Row>
+                      <Table.Head class="w-[300px]">{$_('users.table_member')}</Table.Head>
+                      <Table.Head>{$_('users.table_role')}</Table.Head>
+                      <Table.Head>{$_('users.table_joined')}</Table.Head>
+                      <Table.Head class="w-[80px]">{$_('users.table_actions')}</Table.Head>
+                    </Table.Row>
+                  </Table.Header>
+                  <Table.Body>
+                    {#each users as user (user.id)}
+                      <Table.Row>
+                        <Table.Cell>
+                          <div class="flex items-center gap-3">
+                            <Avatar.Root class="h-9 w-9">
+                              {#if user.avatar}
+                                <Avatar.Image class="" src={user.avatar} alt={user.name} />
+                              {/if}
+                              <Avatar.Fallback
+                                class="bg-[var(--color-primary-default)] text-sm text-white"
+                              >
+                                {getInitials(user.name)}
+                              </Avatar.Fallback>
+                            </Avatar.Root>
+                            <div>
+                              <div class="flex items-center gap-2">
+                                <span class="text-foreground font-medium">{user.name}</span>
+                                {#if user.isSelf}
+                                  <Badge variant="secondary" class="text-xs">{$_('users.you_badge')}</Badge>
+                                {/if}
+                                {#if !user.isActive}
+                                  <Badge variant="outline" class="text-muted-foreground text-xs"
+                                    >{$_('users.inactive_badge')}</Badge
+                                  >
+                                {/if}
+                              </div>
+                              <span class="text-muted-foreground text-sm">{user.email || user.phone || ''}</span>
+                            </div>
+                          </div>
+                        </Table.Cell>
+                        <Table.Cell>
+                          {#if user.isSelf || editingRoleId !== user.id}
+                            <Badge
+                              variant={user.role === 'ADMIN' ? 'default' : 'secondary'}
+                              class="cursor-default"
+                            >
+                              {#if user.role === 'ADMIN'}
+                                <Shield class="me-1 h-3 w-3" />
+                              {:else}
+                                <User class="me-1 h-3 w-3" />
+                              {/if}
+                              {user.role}
+                            </Badge>
+                            {#if !user.isSelf}
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                class="ms-2 h-6 px-2 text-xs"
+                                onclick={() => (editingRoleId = user.id)}
+                              >
+                                <Edit class="h-3 w-3" />
+                              </Button>
+                            {/if}
+                          {:else}
+                            <form
+                              method="POST"
+                              action="?/edit_role"
+                              class="flex items-center gap-2"
+                            >
+                              <input type="hidden" name="user_id" value={user.id} />
+                              <select
+                                name="role"
+                                class="border-input bg-background h-8 rounded-md border px-2 text-sm"
+                              >
+                                <option value="USER" selected={user.role === 'USER'}>{$_('users.role_user')}</option>
+                                <option value="ADMIN" selected={user.role === 'ADMIN'}>{$_('users.role_admin')}</option
+                                >
+                              </select>
+                              <Button type="submit" size="icon" class="h-7 w-7" variant="default">
+                                <Check class="h-3.5 w-3.5" />
+                              </Button>
+                              <Button
+                                type="button"
+                                size="icon"
+                                class="h-7 w-7"
+                                variant="outline"
+                                onclick={() => (editingRoleId = null)}
+                              >
+                                <X class="h-3.5 w-3.5" />
+                              </Button>
+                            </form>
+                          {/if}
+                        </Table.Cell>
+                        <Table.Cell>
+                          <span class="text-muted-foreground text-sm"
+                            >{formatDate(user.joined)}</span
+                          >
+                        </Table.Cell>
+                        <Table.Cell>
+                          {#if user.isSelf}
+                            <span class="text-muted-foreground">-</span>
+                          {:else if !user.isActive}
+                            <!-- Inactive user: show Activate button -->
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              class="h-8 w-8 text-[var(--color-success-default)] hover:bg-[var(--color-success-light)]"
+                              onclick={() => handleActivateUser(user.id)}
+                              title={$_('users.activate_title')}
+                            >
+                              <UserCheck class="h-4 w-4" />
+                            </Button>
+                          {:else}
+                            <!-- Active user: show Deactivate button -->
+                            <AlertDialog.Root>
+                              <AlertDialog.Trigger
+                                class="text-destructive hover:bg-destructive/10 inline-flex h-8 w-8 items-center justify-center rounded-md"
+                                title={$_('users.deactivate_title')}
+                              >
+                                <Trash2 class="h-4 w-4" />
+                              </AlertDialog.Trigger>
+                              <AlertDialog.Content>
+                                <AlertDialog.Header>
+                                  <AlertDialog.Title>{$_('users.deactivate_title_dialog')}</AlertDialog.Title>
+                                  <AlertDialog.Description>
+                                    {$_('users.deactivate_confirm_before')} <strong>{user.name}</strong
+                                    >{$_('users.deactivate_confirm_after')}
+                                  </AlertDialog.Description>
+                                </AlertDialog.Header>
+                                <AlertDialog.Footer>
+                                  <AlertDialog.Cancel>{$_('common.cancel')}</AlertDialog.Cancel>
+                                  <Button
+                                    variant="destructive"
+                                    onclick={() => handleRemoveUser(user.id)}
+                                  >
+                                    {$_('users.deactivate')}
+                                  </Button>
+                                </AlertDialog.Footer>
+                              </AlertDialog.Content>
+                            </AlertDialog.Root>
+                          {/if}
+                        </Table.Cell>
+                      </Table.Row>
+                    {/each}
+
+                    {#if users.length === 0}
+                      <Table.Row>
+                        <Table.Cell colspan={4} class="py-8 text-center">
+                          <Users class="text-muted-foreground/50 mx-auto h-8 w-8" />
+                          <p class="text-muted-foreground mt-2 text-sm">{$_('users.no_members')}</p>
+                        </Table.Cell>
+                      </Table.Row>
+                    {/if}
+                  </Table.Body>
+                </Table.Root>
+              </div>
+          </SectionCard>
+        </Tabs.Content>
+
+        <!-- Teams Tab -->
+        <Tabs.Content value="teams" class="space-y-6">
+          <!-- Header with Create Button -->
+          <div class="flex items-center justify-between">
+            <div>
+              <h2 class="text-lg font-semibold">{$_('users.teams_heading')}</h2>
+              <p class="text-muted-foreground text-sm">
+                {$_('users.teams_description')}
+              </p>
+            </div>
+              <Button onclick={openCreateTeamDialog}>
+                <Plus class="me-2 h-4 w-4" />
+                {$_('users.create_team')}
+              </Button>
+          </div>
+
+          <!-- Teams Grid -->
+          {#if teams.length > 0}
+            <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {#each teams as team (team.id)}
+                <TeamCard {team} onEdit={openEditTeamDialog} onDelete={handleTeamDelete} />
+              {/each}
+            </div>
+          {:else}
+            <!-- Empty State -->
+            <SectionCard padded={false} class="py-12 text-center">
+              <div
+                class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-[var(--color-primary-light)] dark:bg-[var(--color-primary-default)]/15"
+              >
+                <UsersRound class="h-8 w-8 text-[var(--color-primary-default)]" />
+              </div>
+              <h3 class="mb-2 text-lg font-semibold">{$_('users.no_teams')}</h3>
+              <p class="text-muted-foreground mx-auto mb-6 max-w-sm text-sm">
+                {$_('users.no_teams_desc')}
+              </p>
+              <Button onclick={openCreateTeamDialog}>
+                <Plus class="me-2 h-4 w-4" />
+                {$_('users.create_first_team')}
+              </Button>
+            </SectionCard>
+          {/if}
+        </Tabs.Content>
+      </Tabs.Root>
+    </div>
+  {/if}
+</div>
+
+
+<!-- Team Form Dialog -->
+<TeamFormDialog
+  bind:open={teamDialogOpen}
+  team={editingTeam}
+  users={availableUsers}
+  onClose={() => {
+    teamDialogOpen = false;
+    editingTeam = null;
+  }}
+/>
